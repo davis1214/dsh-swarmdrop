@@ -187,6 +187,23 @@ export interface PanelPort {
   readonly state: ObservableSnapshot<PanelState>
   /** Start or stop the network timer as the panel opens and closes. */
   setOpen(open: boolean): void
+  /**
+   * Read network posture once, without claiming the panel is open.
+   *
+   * The settings console needs the same answer the sidebar panel does, and
+   * before this it had no way to ask: `network` was filled only by
+   * {@link setOpen}, which the console never calls because it is not that
+   * panel. A user who only ever opened Settings therefore saw the Network
+   * section render nothing, permanently — the data was gated on a surface they
+   * had not touched.
+   *
+   * Deliberately not `setOpen(true)`: that also starts the three-second timer,
+   * and two surfaces sharing one boolean would have the first to close stop
+   * polling for the one still watching. A one-shot matches what the console
+   * does everywhere else — a section is read when opened and when the user
+   * asks — and costs one process rather than a schedule.
+   */
+  refreshNetwork(): void
   startNode(): Promise<void>
   stopNode(): Promise<void>
   forget(peerId: string): Promise<void>
@@ -501,6 +518,7 @@ export function createPanelPort(ctx: ClientContext): PanelPort {
       if (open) void readNetwork()
       syncNetworkTimer()
     },
+    refreshNetwork(): void { void readNetwork() },
     startNode: () => act('node', ENDPOINT_NODE_START, {}),
     stopNode: () => act('node', ENDPOINT_NODE_STOP, {}),
     forget: (peerId: string) => act(deviceKey(peerId), ENDPOINT_DEVICE_FORGET, { peerId }),

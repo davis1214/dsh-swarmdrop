@@ -63,21 +63,44 @@ export function apply(ctx: ClientContext): void {
   // one appears. See `live-transfers.ts`.
   const live = createLiveTransfers()
 
-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
-    {
-      name: 'conversation.chat.node',
-      key: 'swarmdrop-transfer',
-      // The factory takes the session id (this slot is session-scoped) and
-      // ignores it: transfers belong to the machine, not to a conversation, and
-      // the row is identified by transfer id.
-      inject: () => live.face,
-    },
-    TransferRow,
-  ))
-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
-    { name: 'conversation.chat.node', key: 'swarmdrop-received' },
-    ReceivedRow,
-  ))
+  // ## Why the rows live under `locale` and the dictionaries no longer live
+  // under `connection`
+  //
+  // The dictionaries were registered inside the panel's `['connection',
+  // 'locale']` fiber, which tied this plugin's copy to a service that has
+  // nothing to do with copy: a deployment with `locale` but no `connection`
+  // got conversation rows and no words for them. They belong here, under the
+  // one service they actually need.
+  //
+  // The rows join them because they now *have* copy to translate — a direction,
+  // a file count, an outcome, three control verbs. Gating them on `locale` is
+  // safe rather than a new failure mode: `dsh-client-locale` and
+  // `dsh-client-ui-conversation` ship in the same bundle (`web-app`), and the
+  // latter is what provides the `conversation.chat.node` slot at all. Where
+  // there is somewhere to render a row, there is a locale service.
+  ctx.inject(['locale'], localeCtx => {
+    localeCtx.effect(
+      () => localeCtx.locale.register(NS, { zh, en }),
+      'swarmdrop: dictionaries',
+    )
+
+    localeCtx.slots.inject('conversation.chat.node', () => localeCtx.slots.register(
+      {
+        name: 'conversation.chat.node',
+        key: 'swarmdrop-transfer',
+        // The factory takes the session id (this slot is session-scoped) and
+        // ignores it: transfers belong to the machine, not to a conversation,
+        // and the row is identified by transfer id.
+        inject: () => live.face,
+        locale: NS,
+      },
+      TransferRow,
+    ))
+    localeCtx.slots.inject('conversation.chat.node', () => localeCtx.slots.register(
+      { name: 'conversation.chat.node', key: 'swarmdrop-received', locale: NS },
+      ReceivedRow,
+    ))
+  })
 
   // The `@` source is optional: a deployment without the input-trigger service
   // still gets the conversation rows. Failing to activate over a missing
@@ -94,7 +117,7 @@ export function apply(ctx: ClientContext): void {
   // what carries its channel, and a deployment serving this bundle without it
   // is not one this plugin should refuse to load into.
   ctx.inject(['connection', 'locale'], panelCtx => {
-    panelCtx.effect(() => panelCtx.locale.register(NS, { zh, en }), 'swarmdrop: panel dictionaries')
+    // The dictionaries are registered above, under `locale` alone.
     // The nav label is registrant-owned copy: the settings shell keeps none of
     // its own, and re-registers on locale change through the ledger bump.
     const t = panelCtx.locale.bind(NS)
@@ -126,6 +149,9 @@ export function apply(ctx: ClientContext): void {
         hooks: { panel: port.state, console: consolePort.state },
         onOpenSection: section => { consolePort.load(section) },
         onRefresh: section => { consolePort.refresh(section) },
+        // The console's own door to network posture: it is not the sidebar
+        // panel, so `setOpen` is not its to call. See `PanelPort`.
+        onRefreshNetwork: () => { port.refreshNetwork() },
         onAct: action => { consolePort.act(action) },
         onDismiss: () => { consolePort.dismiss() },
         onStartNode: () => { void port.startNode() },

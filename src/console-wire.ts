@@ -119,7 +119,18 @@ export interface TransferRow {
   readonly phase: string
   readonly totalSize: number
   readonly transferredBytes: number
-  readonly startedAt: number
+  /**
+   * Last activity, in Unix milliseconds — **not** `startedAt`.
+   *
+   * This is the sort key, and SwarmDrop's `DESIGN.md` fixes it as one across
+   * every build (Transfer List Order Contract): "the question this list answers
+   * is *what happened recently*. A session started three days ago and resumed a
+   * minute ago is the single most relevant row on the screen, and sorting by
+   * start time buries it three days down." The three graphical builds each
+   * shipped a different key until 2026-08-12, which put the same resumed
+   * session at the top on two of them and near the bottom on the third.
+   */
+  readonly updatedAt: number
   /**
    * Which controls apply to this row **right now**.
    *
@@ -129,6 +140,23 @@ export interface TransferRow {
    * rather than a row that had already finished.
    */
   readonly controls: readonly TransferControl[]
+  /**
+   * What the receive policy decided, when it decided anything.
+   *
+   * `auto_accept` | `require_confirmation` | `reject`, or `null` on a send.
+   *
+   * **Worth surfacing precisely because this host answers for itself.** The
+   * default trust level for a newly paired device is `Collaborator`, which
+   * carries `require_confirmation` — and the resident node accepts on the
+   * user's behalf, because there is no terminal to hold a prompt (see
+   * `crates/cli/src/runtime/receive.rs`). So a row reading "received" may well
+   * be one that a desktop build would have stopped to ask about. That is a
+   * deliberate stance, not a bug, but a user who cannot see it has no way to
+   * know it was taken.
+   */
+  readonly policyAction: string | null
+  /** The CLI's own wording for that decision. Not translated; may be absent. */
+  readonly policyReason: string | null
 }
 
 /** One configurable scalar, with everything needed to explain its value. */

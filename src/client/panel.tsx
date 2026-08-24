@@ -27,10 +27,10 @@ import {
   type CSSProperties, type ReactNode,
 } from 'react'
 import {
-  Button, IconCheckOutline16, IconPlayOutline16,
+  Button, IconCheckOutline16, IconCopyOutline16, IconPlayOutline16,
   IconPlusOutline16, IconRefreshOutline14,
   IconStopFill16, IconTrashOutline16, StateDot, useDismissOnOutsidePointer,
-  type StateDotState,
+  writeClipboard, type StateDotState,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { HostObservable, InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the sidebar's SlotMap declaration (the 'sidebar.footer.action'
@@ -38,7 +38,7 @@ import type { HostObservable, InjectFace, PropsLocale, PropsRuntime } from '@dee
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 
 import { SwarmDropMark } from './brand.js'
-import { formatDuration, formatSize } from './format.js'
+import { formatDuration, formatSize, isSameLocalDay } from './format.js'
 import { PairInviteDialog, PairingRequestDialog, useInviteDialog } from './pairing-modal.js'
 import { QR_FACE_PX, type PairQrAnswer, type PanelDevice } from '../panel-wire.js'
 import { deviceKey, type PanelState } from './panel-port.js'
@@ -124,11 +124,19 @@ const sectionStyle: CSSProperties = {
   borderTop: '1px solid var(--dsw-alias-border-l2)',
 }
 
+/**
+ * A group's title inside the panel.
+ *
+ * Smaller and quieter than the console's — 320px of width belongs to the data,
+ * not to five labels. But not an eyebrow: `text-transform: uppercase` does
+ * nothing to the Chinese these read in, so all it bought was 11px tertiary
+ * text, which is the lowest-contrast thing on the panel for the one element
+ * that has to be scannable.
+ */
 const headingStyle: CSSProperties = {
-  color: 'var(--dsw-alias-label-tertiary)',
-  fontSize: 11,
-  textTransform: 'uppercase',
-  letterSpacing: '0.04em',
+  color: 'var(--dsw-alias-label-secondary)',
+  fontSize: 12,
+  fontWeight: 600,
   marginBottom: 6,
 }
 
@@ -158,26 +166,40 @@ const staleStyle: CSSProperties = {
   padding: '4px 8px',
   borderRadius: 6,
   fontSize: 11,
-  color: 'var(--dsw-alias-state-warning-primary)',
+  color: 'var(--dsw-alias-state-warn-primary)',
   background: 'var(--dsw-alias-interactive-bg-hover)',
 }
 
 /** A one-line aside under something, in the muted voice. */
 const hintStyle: CSSProperties = { ...mutedStyle, fontSize: 11, marginTop: 6 }
 
-/** The groove a transfer's progress bar sits in. */
+/**
+ * The groove a transfer's progress bar sits in.
+ *
+ * ⚠️ Not `--dsw-alias-fill-tertiary`, and the fill below is not
+ * `--dsw-alias-fill-brand`: dsh defines no `fill-*` alias at all, so both
+ * resolved to nothing and the whole bar — groove and fill — rendered
+ * transparent. A progress bar that is invisible at every percentage looks
+ * exactly like a transfer that is not progressing.
+ */
 const trackStyle: CSSProperties = {
   height: 3,
   marginTop: 6,
   borderRadius: 2,
-  background: 'var(--dsw-alias-fill-tertiary)',
+  background: 'var(--dsw-alias-border-l2)',
   overflow: 'hidden',
 }
 
-/** The filled part. Width is the only thing that changes, so it animates cleanly. */
+/**
+ * The filled part. Width is the only thing that changes, so it animates cleanly.
+ *
+ * Business blue, matching the console's selected tab: `brand-primary` resolves
+ * to neutral ink in dsh's sheet, which would make the filled part and the
+ * groove differ only in lightness.
+ */
 const fillStyle: CSSProperties = {
   height: '100%',
-  background: 'var(--dsw-alias-fill-brand)',
+  background: 'var(--dsw-alias-state-business-primary)',
   transition: 'width 200ms linear',
 }
 
@@ -186,6 +208,63 @@ const monoStyle: CSSProperties = {
   fontSize: 11,
   color: 'var(--dsw-alias-label-tertiary)',
   wordBreak: 'break-all',
+}
+
+/**
+ * Shorten a long identifier for a 320px column, keeping both ends.
+ *
+ * Both things this renders — a node id and a relayed multiaddr — are told apart
+ * by their ends, not their middles: two ids from the same key type share a
+ * prefix, and two circuit addresses share everything up to the final hop. A
+ * trailing ellipsis would cut off the half that distinguishes them.
+ */
+function elide(value: string, head: number, tail: number): string {
+  if (value.length <= head + tail + 1) return value
+  return `${value.slice(0, head)}…${value.slice(-tail)}`
+}
+
+/**
+ * A long value on one line, with the button that copies it.
+ *
+ * The panel is 320px wide. Rendered in full, a node id takes two lines and a
+ * relayed multiaddr takes four — the address alone was a quarter of the panel's
+ * height — and neither could be copied out of, so the space bought nothing. One
+ * elided line with a copy button is shorter *and* is the first version of this
+ * that can actually hand you the value. The full string stays reachable through
+ * the title attribute.
+ */
+function CopyLine({ value, label, head, tail, t }: {
+  value: string
+  /** Accessible name for the copy button. */
+  label: string
+  head: number
+  tail: number
+  t: Translate
+}) {
+  const [copied, setCopied] = useState(false)
+  const copy = useCallback(() => {
+    void writeClipboard(value).then(() => {
+      setCopied(true)
+      setTimeout(() => { setCopied(false) }, 1_500)
+    })
+  }, [value])
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 }}>
+      <span style={{ ...monoStyle, flex: 1, minWidth: 0, wordBreak: 'normal' }} title={value}>
+        {elide(value, head, tail)}
+      </span>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={copy}
+        title={label}
+        aria-label={label}
+        style={{ flexShrink: 0 }}
+        icon={copied ? <IconCheckOutline16 /> : <IconCopyOutline16 />}
+      />
+    </div>
+  )
 }
 
 /** One `label — value` line. */
@@ -364,14 +443,24 @@ type Translate = SwarmDropPanelProps['t']
 /**
  * The inbox count, which expands into the newest few entries.
  *
- * **Expands in place rather than opening Settings.** dsh hands `openSection`
- * only to `settings.onboarding` entries, so a plugin cannot open the settings
- * panel on its own page — a row that looked like a link would have nowhere to
- * go. What it can do is show what it already has: the entries ride along on the
- * state answer (see `PanelInboxEntry`), so expanding costs nothing.
+ * **Expands in place rather than opening Settings, because it cannot open
+ * Settings.** dsh hands `openSection` to `settings.onboarding` entries and
+ * nowhere else — `SettingsSectionOwnerProps` carries only `close`, and
+ * `sidebar.footer.action` carries no navigation at all — so a row styled as a
+ * link would have nothing to call. Re-check `SettingsRoot.tsx` before assuming
+ * that is still true; if a seam appears, this is the row that should use it.
  *
- * The full list, with export, lives on the settings page the user opens
- * themselves.
+ * ## What an entry shows, and why it is not just a name
+ *
+ * This listed `name · N` and stopped, which is what made the expansion look
+ * not worth the click. The answer was never "the panel has too little room" —
+ * it was that `PanelInboxEntry` already carries `totalSize`, `receivedAt` and
+ * `contentKind`, and none of the three were being drawn. Size and time are
+ * what let someone recognise the thing they just sent, which is the entire
+ * question being asked of this section.
+ *
+ * The full list, with where a file landed and the button that exports it,
+ * stays on the settings page the user opens themselves.
  */
 function InboxSection({ count, recent, t }: {
   count: number
@@ -397,18 +486,52 @@ function InboxSection({ count, recent, t }: {
         ) : <span>{t('inboxCount', { count })}</span>}
       </div>
       {open && recent.map(entry => (
-        <div key={entry.itemId} style={{ ...hintStyle, marginTop: 4 }}>
-          {entry.sourceName === '' ? t('unnamedDevice') : entry.sourceName}
-          {' · '}
-          {t('inboxCount', { count: entry.itemCount })}
-        </div>
+        <InboxEntryRow key={entry.itemId} entry={entry} t={t} />
       ))}
-      {/* The panel deliberately stops here. Anything more — the whole list,
-          where a file landed, exporting it — is the settings page's, which has
-          room for it and is not competing with a status light for space. */}
+      {/* The panel deliberately stops here. Anything more — where a file
+          landed, exporting it — is the settings page's, which has room for it
+          and is not competing with a status light for space. */}
       {open && count > recent.length && (
-        <div style={{ ...hintStyle, marginTop: 4 }}>{t('inboxMore')}</div>
+        <div style={{ ...hintStyle, marginTop: 6 }}>{t('inboxMore')}</div>
       )}
+    </div>
+  )
+}
+
+/**
+ * One arrival: who sent it and when, then what it was.
+ *
+ * Two lines in the shape every mail client uses, because it is the same
+ * question — sender and time carry recognition, so they lead; the payload
+ * qualifies it underneath. The time is bare clock for today and a date
+ * otherwise (see `isSameLocalDay`): in a 320px column a full timestamp is most
+ * of the line, and for the newest few entries the date is usually today's.
+ */
+function InboxEntryRow({ entry, t }: {
+  entry: PanelState['inboxRecent'][number]
+  t: Translate
+}) {
+  const received = new Date(entry.receivedAt)
+  const when = isSameLocalDay(entry.receivedAt, Date.now())
+    ? received.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    : received.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
+
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={rowStyle}>
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {entry.sourceName === '' ? t('unnamedDevice') : entry.sourceName}
+        </span>
+        {/* Tabular figures so the times form a column rather than drifting. */}
+        <span style={{ ...hintStyle, marginTop: 0, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+          {when}
+        </span>
+      </div>
+      <div style={{ ...hintStyle, marginTop: 0 }}>
+        {entry.contentKind === 'text'
+          ? t('inboxText')
+          : `${t('inboxFiles', { count: entry.itemCount })} · ${formatSize(entry.totalSize)}`}
+      </div>
     </div>
   )
 }
@@ -536,7 +659,9 @@ function NodeSection({ state, busy, onStartNode, onStopNode, t }: {
           </Button>
         )}
       </div>
-      {state.network?.peerId != null && <div style={monoStyle}>{state.network.peerId}</div>}
+      {state.network?.peerId != null && (
+        <CopyLine value={state.network.peerId} label={t('copyNodeId')} head={10} tail={8} t={t} />
+      )}
     </div>
   )
 }
@@ -565,7 +690,9 @@ function NetworkSection({ network, nodeRunning, t }: {
       </Fact>
       <Fact label={t('peers')}>{network.connectedPeers}</Fact>
       <Fact label={t('listen')}>{t('listenCount', { count: network.listenAddrs.length })}</Fact>
-      {network.publicAddr != null && <div style={monoStyle}>{network.publicAddr}</div>}
+      {network.publicAddr != null && (
+        <CopyLine value={network.publicAddr} label={t('copyAddress')} head={22} tail={14} t={t} />
+      )}
     </div>
   )
 }
@@ -662,6 +789,24 @@ function PairingSection({ pairing, busy, onBeginPair, onViewPairing, onCancelPai
   )
 }
 
+/**
+ * The word beside a device's dot.
+ *
+ * SwarmDrop's `DESIGN.md` (Device Card Contract, slot 3) requires the online
+ * state to be carried by a **dot *and* a word** — "a bare colored dot does not
+ * satisfy this". Both surfaces here drew the dot alone, which leaves the state
+ * encoded in colour only: unreadable to a screen reader, and ambiguous to
+ * anyone who cannot separate amber from green.
+ *
+ * Three states, never two. `null` means no node has been running to probe
+ * with; rendering that as "offline" sends the user to debug a network that is
+ * fine.
+ */
+function deviceStateWord(online: boolean | null, t: Translate): string {
+  if (online === null) return t('deviceUnknownState')
+  return online ? t('deviceOnline') : t('deviceOffline')
+}
+
 function DeviceRow({ device, busy, onForget, t }: {
   device: PanelDevice
   busy: boolean
@@ -700,6 +845,7 @@ function DeviceRow({ device, busy, onForget, t }: {
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {device.name}
         </span>
+        <span style={{ ...mutedStyle, flexShrink: 0 }}>{deviceStateWord(device.online, t)}</span>
       </span>
       <Button
         variant="ghost"

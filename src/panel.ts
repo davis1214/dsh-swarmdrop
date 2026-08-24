@@ -33,7 +33,7 @@ import type {} from '@deepseek-ai/dsh-client-connection'
 import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
 
 import { call, inviteQr, isUnknownToCli, SwarmDropError } from './cli.js'
-import { count, flag, list, optional, text } from './coerce.js'
+import { count, flag, list, optional, rows, text } from './coerce.js'
 import { CONSOLE_ROUTES } from './console.js'
 import type { MachineState } from './machine.js'
 import type { PairingSession } from './pairing.js'
@@ -47,6 +47,8 @@ import {
   type PairQrRequest, type PairRespondRequest,
   type PanelEndpoint, type StateAnswer, type StateRequest,
   type TransferControlAction, type TransferControlRequest,
+  type InfraLink,
+  type InfraRelay,
 } from './panel-wire.js'
 import type { Revision } from './revision.js'
 
@@ -72,6 +74,8 @@ interface StatusRow {
   readonly relayReady?: unknown
   readonly bootstrapConnected?: unknown
   readonly connectedPeers?: unknown
+  readonly publicReachable?: unknown
+  readonly infraLinks?: unknown
 }
 
 /**
@@ -384,7 +388,53 @@ async function network(): Promise<NetworkAnswer> {
     relayReady: flag(row.relayReady),
     bootstrapConnected: flag(row.bootstrapConnected),
     connectedPeers: count(row.connectedPeers),
+    publicReachable: flag(row.publicReachable),
+    infraLinks: infraLinksOf(row.infraLinks),
   }
+}
+
+/**
+ * The infra links, in the shape the presentation judgment consumes.
+ *
+ * `firstSeen` is converted here rather than in the browser: the CLI answers
+ * with an ISO string, the judgment wants milliseconds, and doing it at the
+ * boundary keeps "what shape does this end speak" out of the rule itself. An
+ * unparseable stamp becomes `0`, which reads as "seen long ago" and so never
+ * holds a link inside the grace window on the strength of a bad timestamp.
+ */
+function infraLinksOf(raw: unknown): readonly InfraLink[] {
+  return rows(raw).map((row): InfraLink => {
+    const roles = (row['roles'] ?? {}) as Record<string, unknown>
+    const parsed = Date.parse(text(row['firstSeen']))
+    return {
+      peerId: text(row['peerId']),
+      scope: text(row['scope']),
+      connected: flag(row['connected']),
+      everActive: flag(row['everActive']),
+      firstSeenMs: Number.isNaN(parsed) ? 0 : parsed,
+      relay: relayOf(row['relay']),
+      // Any non-null exclusion means the same thing to the reader: your own
+      // settings took this out of play. The kernel's variants matter to the
+      // kernel; here the only question is whether to say "excluded".
+      excluded: row['excluded'] != null,
+      roles: {
+        relayServer: flag(roles['relayServer']),
+        kadServer: flag(roles['kadServer']),
+      },
+      sources: list(row['sources']),
+    }
+  })
+}
+
+/** The relay track, or `null` when the kernel has not built one. */
+function relayOf(raw: unknown): InfraRelay | null {
+  if (raw == null || typeof raw !== 'object') return null
+  const row = raw as Record<string, unknown>
+  const kind = text(row['kind'])
+  if (kind === 'active') return { kind: 'active', circuitAddr: text(row['circuitAddr']) }
+  if (kind === 'failed') return { kind: 'failed', lastError: text(row['lastError']) }
+  if (kind === 'connecting') return { kind: 'connecting' }
+  return null
 }
 
 /** Unpair one device, addressed by its node identity. */

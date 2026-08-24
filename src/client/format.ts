@@ -145,3 +145,20 @@ function atLeast(version: string, floor: string): boolean {
   }
   return true
 }
+
+/**
+ * Whether two Unix-millisecond timestamps land on the same local day.
+ *
+ * Used to decide whether a received-at stamp is worth a date. In a 320px
+ * column a full `toLocaleString()` is most of the line, and for the entries
+ * the panel carries — the newest few — the date is usually today's and adds
+ * nothing. Comparing local components rather than dividing by 86_400_000 is
+ * what makes this correct across DST, where a local day is 23 or 25 hours.
+ */
+export function isSameLocalDay(a: number, b: number): boolean {
+  const left = new Date(a)
+  const right = new Date(b)
+  return left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate()
+}

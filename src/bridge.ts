@@ -53,6 +53,15 @@ const PHASE_TERMINAL = 'terminal'
 export class SwarmDropBridge {
   /** transfer id → the agent whose conversation started it. */
   private readonly owners = new Map<TransferId, Agent>()
+  /**
+   * Inbound transfers already given an opening row.
+   *
+   * Keyed by transfer rather than by (transfer, agent): a conversation opened
+   * midway through an arrival will not have the opening row, and that is the
+   * correct outcome — its log starts where it starts, and the node stays
+   * pending rather than inventing a beginning it did not witness.
+   */
+  private readonly announced = new Set<TransferId>()
 
   constructor(private readonly ctx: Context, private readonly machine: MachineState) {}
 
@@ -118,21 +127,53 @@ export class SwarmDropBridge {
 
   private onTransfer(frame: WatchFrame): void {
     const transferId = text(frame['sessionId'])
-    const agent = this.owners.get(transferId)
-    if (agent === undefined) return
-
     const phase = text(frame['phase'])
+    const owner = this.owners.get(transferId)
+
+    // An arrival is nobody's in particular, so it goes to every root — the
+    // same reasoning inbox-received follows. Without this the only sign that a
+    // device is sending you two gigabytes was a row appearing once it had
+    // finished: the transcript said nothing at all while it was happening.
+    const agents = owner !== undefined
+      ? [owner]
+      : text(frame['direction']) === 'receive' ? [...this.ctx.agents.roots()] : []
+    if (agents.length === 0) return
+
+    // The row has to be opened before it can be updated: an update that
+    // arrives without its start leaves the node pending forever (see
+    // `nodes.tsx`). Sends are opened by `swarmdrop/sent` at call time; an
+    // arrival has no such moment, so the first frame about it is that moment.
+    if (owner === undefined && !this.announced.has(transferId)) {
+      this.announced.add(transferId)
+      for (const agent of agents) {
+        this.append(agent, 'swarmdrop/receiving', {
+          version: 1,
+          transferId,
+          peerName: text(frame['peerName']),
+          contentKind: text(frame['contentKind']),
+          fileCount: count(frame['fileCount']),
+          totalBytes: count(frame['totalBytes']),
+        })
+      }
+    }
+
     const terminalReason = text(frame['terminalReason'])
-    this.append(agent, 'swarmdrop/transfer', {
-      version: 1,
-      transferId,
-      phase,
-      ...terminalReason === '' ? {} : { terminalReason },
-      transferredBytes: count(frame['transferredBytes']),
-      totalBytes: count(frame['totalBytes']),
-    })
+    for (const agent of agents) {
+      this.append(agent, 'swarmdrop/transfer', {
+        version: 1,
+        transferId,
+        phase,
+        ...terminalReason === '' ? {} : { terminalReason },
+        transferredBytes: count(frame['transferredBytes']),
+        totalBytes: count(frame['totalBytes']),
+      })
+    }
+
     // The terminal phase is the last thing this transfer will ever say.
-    if (phase === PHASE_TERMINAL) this.owners.delete(transferId)
+    if (phase === PHASE_TERMINAL) {
+      this.owners.delete(transferId)
+      this.announced.delete(transferId)
+    }
   }
 
   /** Append to every top-level conversation. */
@@ -149,7 +190,7 @@ export class SwarmDropBridge {
    * ordinary, not an error worth surfacing. Letting it throw would take down
    * the subscription for every other session too.
    */
-  private append<T extends 'swarmdrop/inbox-received' | 'swarmdrop/transfer'>(
+  private append<T extends 'swarmdrop/inbox-received' | 'swarmdrop/transfer' | 'swarmdrop/receiving'>(
     agent: Agent,
     type: T,
     data: Parameters<Agent['session']['append']>[1] & object,

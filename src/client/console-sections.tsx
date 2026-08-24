@@ -21,9 +21,9 @@
  * see `console-wire.ts` for why that is a rule and not a default.
  */
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
-  Button, IconCheckOutline16, IconPlayOutline16, IconPlusOutline16, IconStopFill16,
+  Button, DisclosureRow, IconCheckOutline16, IconGlobeOutline14, IconPlusOutline16,
   IconTrashOutline16, StateDot, type StateDotState,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 
@@ -32,6 +32,9 @@ import {
   cardStyle, errorStyle, inputStyle, listStyle, monoStyle, mutedStyle, rowStyle, warnStyle,
 } from './console-ui.js'
 import { formatSize, isTooOld, MINIMUM_CLI, versionSkew } from './format.js'
+import {
+  deriveInfraLinkState, type InfraLinkState, type StatusTone,
+} from './node-health.js'
 import type { ConsoleState } from './console-port.js'
 import {
   actionKey,
@@ -42,6 +45,7 @@ import {
 import type { SwarmDropKey } from './locales.js'
 import { PairInviteDialog, useInviteDialog } from './pairing-modal.js'
 import type { PairQrAnswer } from '../panel-wire.js'
+import type { InfraLink } from '../panel-wire.js'
 import type { PanelState } from './panel-port.js'
 import { deviceKey } from './panel-port.js'
 import type { SwarmDropConsoleProps } from './console.js'
@@ -106,12 +110,6 @@ function Pending({ section, t, console: state, children }: SectionProps & {
 
 // ─────────────────────────────────────────────────────────────── overview ────
 
-/** What the node dot says. Mirrors the panel's, for the same reasons. */
-function nodeDot(panel: PanelState): StateDotState {
-  if (!panel.ready) return 'ongoing'
-  return panel.nodeRunning ? 'done' : 'warning'
-}
-
 /**
  * Node, network and devices — the panel's facts without the abbreviation.
  *
@@ -119,74 +117,36 @@ function nodeDot(panel: PanelState): StateDotState {
  * device table already arrive on the subscription the panel keeps parked, and
  * asking again would spawn a process to learn what the browser already knows.
  */
-export function OverviewSection({ panel, t, onStartNode, onStopNode, onForget }: {
+export function OverviewSection({ panel, t, onForget, onRefreshNetwork }: {
   panel: PanelState
   t: Translate
-  onStartNode: () => void
-  onStopNode: () => void
   onForget: (peerId: string) => void
+  onRefreshNetwork: () => void
 }) {
-  const status = !panel.ready
-    ? t('nodeUnknown')
-    : panel.nodeRunning ? t('nodeRunning') : t('nodeStopped')
-
   return (
     <>
-      <Group title={t('node')}>
-        <div style={rowStyle}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <StateDot state={nodeDot(panel)} size={8} />
-            {status}
-          </span>
-          {panel.nodeRunning ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={panel.busy.includes('node')}
-              onClick={onStopNode}
-              icon={<IconStopFill16 />}
-            >
-              {t('stop')}
-            </Button>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={panel.busy.includes('node')}
-              onClick={onStartNode}
-              icon={<IconPlayOutline16 />}
-            >
-              {t('start')}
-            </Button>
-          )}
-        </div>
-        {panel.network?.peerId != null && (
+      {/* Liveness and start/stop used to head this page and now head the whole
+          console — they are the one fact all seven pages need. What is left
+          here is the identity behind that state, which is only worth a line
+          when there is one to show. */}
+      {panel.network?.peerId != null && (
+        <Group title={t('node')}>
           <Copyable value={panel.network.peerId} label={t('copyNodeId')} />
-        )}
-      </Group>
+        </Group>
+      )}
 
       {/* Hidden while stopped: every field would read "unknown" or "none",
           which is four lines repeating what the node row already said. */}
-      {panel.nodeRunning && panel.network !== null && (
-        <Group title={t('network')}>
-          <Fact label={t('nat')}>{panel.network.natStatus}</Fact>
-          <Fact label={t('relay')}>
-            {panel.network.relayReady ? t('relayReady') : t('relayWaiting')}
-          </Fact>
-          <Fact label={t('bootstrap')}>
-            {panel.network.bootstrapConnected ? t('bootstrapConnected') : t('bootstrapWaiting')}
-          </Fact>
-          <Fact label={t('peers')}>{panel.network.connectedPeers}</Fact>
-          {panel.network.publicAddr != null && (
-            <Copyable value={panel.network.publicAddr} label={t('copyAddress')} />
-          )}
-          <div style={mutedStyle}>{t('listen')}</div>
-          {panel.network.listenAddrs.length === 0
-            ? <Empty>{t('noListenAddrs')}</Empty>
-            : panel.network.listenAddrs.map(addr => (
-              <Copyable key={addr} value={addr} label={t('copyAddress')} />
-            ))}
-        </Group>
+      {/* Mounted whenever the node is running, not only once an answer has
+          arrived: it is the thing that *asks* for that answer. Gating it on
+          `network !== null` — which the page did before it could ask — is what
+          made the section invisible to anyone who never opened the sidebar. */}
+      {panel.nodeRunning && (
+        <NetworkDisclosure
+          network={panel.network}
+          t={t}
+          onRefreshNetwork={onRefreshNetwork}
+        />
       )}
 
       <Group title={t('devices')}>
@@ -208,6 +168,13 @@ export function OverviewSection({ panel, t, onStartNode, onStopNode, onForget }:
                         size={8}
                       />
                       {device.name === '' ? t('unnamedDevice') : device.name}
+                      {/* Slot 3 of the Device Card Contract is a dot *and* a
+                          word. The dot alone leaves the state in colour only. */}
+                      <span style={{ ...mutedStyle, flexShrink: 0 }}>
+                        {device.online === null
+                          ? t('deviceUnknownState')
+                          : device.online ? t('deviceOnline') : t('deviceOffline')}
+                      </span>
                     </span>
                     <Button
                       variant="ghost"
@@ -226,6 +193,157 @@ export function OverviewSection({ panel, t, onStartNode, onStopNode, onForget }:
           )}
       </Group>
     </>
+  )
+}
+
+/**
+ * Network facts, collapsed by default.
+ *
+ * ## Why this one collapses and the rest of the page does not
+ *
+ * These are diagnostics, and a user opening SwarmDrop's settings is almost
+ * never asking a diagnostic question — they are here to revoke an invite or
+ * find a file. Expanded, the section is longer than everything else on the
+ * page combined: this machine reports **17 listen addresses**, each a full
+ * multiaddr, so the answer to "is it working" ends up below several screens of
+ * material that only matters once it is not.
+ *
+ * That ordering is what SwarmDrop's own `DESIGN.md` fixes as the **Node Status
+ * Contract**: a conclusion layer that is always visible, and *one* collapsed
+ * disclosure holding every diagnostic — "one collapsed disclosure, default
+ * closed", in its words. The conclusion layer lives in the page header; this
+ * is the diagnostic half of the same split.
+ *
+ * The collapsed row still carries the conclusion, so collapsing costs no
+ * answer: relay readiness is the one field here that changes what the user can
+ * actually do.
+ */
+function NetworkDisclosure({ network, t, onRefreshNetwork }: {
+  /** `null` until the first answer lands — this component is what asks. */
+  network: PanelState['network']
+  t: Translate
+  onRefreshNetwork: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const toggle = useCallback(() => { setOpen(current => !current) }, [])
+
+  // Once on mount, in the console's own idiom: opening a page is what fetches
+  // it. Not on an interval — the sidebar panel owns the polling, and it polls
+  // only while it is the thing on screen.
+  useEffect(() => { onRefreshNetwork() }, [onRefreshNetwork])
+
+  return (
+    <section>
+      <DisclosureRow
+        icon={<IconGlobeOutline14 />}
+        title={t('network')}
+        open={open}
+        expandable
+        onToggle={toggle}
+        expandOnRowClick
+        collapsedContent={
+          <span style={mutedStyle}>
+            {network === null
+              ? t('loading')
+              : network.relayReady ? t('relayReady') : t('relayWaiting')}
+          </span>
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 8 }}>
+          {network === null ? <Empty>{t('loading')}</Empty> : <>
+          <Fact label={t('nat')}>{network.natStatus}</Fact>
+          <Fact label={t('relay')}>
+            {network.relayReady ? t('relayReady') : t('relayWaiting')}
+          </Fact>
+          <Fact label={t('bootstrap')}>
+            {network.bootstrapConnected ? t('bootstrapConnected') : t('bootstrapWaiting')}
+          </Fact>
+          <Fact label={t('peers')}>{network.connectedPeers}</Fact>
+          {network.publicAddr != null && (
+            <Copyable value={network.publicAddr} label={t('copyAddress')} />
+          )}
+          <div style={mutedStyle}>{t('listen')}</div>
+          {network.listenAddrs.length === 0
+            ? <Empty>{t('noListenAddrs')}</Empty>
+            : network.listenAddrs.map(addr => (
+              <Copyable key={addr} value={addr} label={t('copyAddress')} />
+            ))}
+
+          {/* Every infrastructure relationship, one row each. This is the
+              other half of the diagnostic layer: the fields above are local
+              truth, these are the relationships that decide whether anyone
+              can reach it. The "引导节点" tab is a *configuration* surface —
+              adding and removing — which is a different question from "what
+              is wrong with the ones I have". */}
+          {network.infraLinks.length > 0 && (
+            <>
+              <div style={mutedStyle}>{t('infraLinks')}</div>
+              {network.infraLinks.map(link => (
+                <InfraLinkRow key={link.peerId} link={link} t={t} />
+              ))}
+            </>
+          )}
+          </>}
+        </div>
+      </DisclosureRow>
+    </section>
+  )
+}
+
+const LINK_KEY: Record<InfraLinkState, SwarmDropKey> = {
+  seedOnly: 'linkSeedOnly',
+  excluded: 'linkExcluded',
+  settling: 'linkSettling',
+  ok: 'linkOk',
+  lost: 'linkLost',
+  unreachable: 'linkUnreachable',
+}
+
+const LINK_DOT: Record<StatusTone, StateDotState> = {
+  neutral: 'ongoing',
+  success: 'done',
+  warning: 'warning',
+}
+
+/**
+ * One infrastructure relationship.
+ *
+ * ## The error is shown verbatim and can be copied
+ *
+ * `lastError` is the kernel's own string. The Node Status Contract forbids
+ * translating it — it is what the user pastes into an issue and diffs against a
+ * log, and a translated one is useless for both. It is rendered through
+ * `Copyable` because the same contract requires it to be selectable: a long
+ * string that looks clickable but is not violates the copy affordance.
+ *
+ * ## Attribution, not just a verdict
+ *
+ * `scope` and `sources` answer "where did this node come from" — configured by
+ * me, or learned from the network. Without it a failing link is a peer id and a
+ * complaint, and the user cannot tell whether it is theirs to fix.
+ */
+function InfraLinkRow({ link, t }: { link: InfraLink; t: Translate }) {
+  const state = deriveInfraLinkState(link, Date.now())
+
+  return (
+    <div style={cardStyle}>
+      <div style={rowStyle}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <StateDot state={LINK_DOT[state.tone]} size={8} />
+          <span style={{ ...monoStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {link.peerId}
+          </span>
+        </span>
+        <span style={{ flexShrink: 0 }}>{t(LINK_KEY[state.state])}</span>
+      </div>
+      <div style={{ ...mutedStyle, fontSize: 12 }}>
+        {[link.scope, ...link.sources].join(' · ')}
+        {link.roles.relayServer && ` · ${t('relay')}`}
+      </div>
+      {state.detail !== null && (
+        <Copyable value={state.detail} label={t('copyError')} style={{ marginTop: 2 }} />
+      )}
+    </div>
   )
 }
 
@@ -463,8 +581,16 @@ function InboxCard({ item, busy, onExport, t }: {
   return (
     <div style={cardStyle}>
       <div style={rowStyle}>
-        <strong style={{ minWidth: 0, wordBreak: 'break-word' }}>{item.title}</strong>
-        <span style={mutedStyle}>{formatSize(item.totalSize)}</span>
+        {/* 600 rather than `<strong>`'s 700: at 13px the heavier weight stops
+            reading as emphasis and starts reading as a different font. */}
+        <span style={{ minWidth: 0, wordBreak: 'break-word', fontWeight: 600 }}>
+          {item.title}
+        </span>
+        {/* Tabular figures so sizes line up down the column — the numbers are
+            there to be compared with each other, not read as prose. */}
+        <span style={{ ...mutedStyle, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+          {formatSize(item.totalSize)}
+        </span>
       </div>
       <div style={mutedStyle}>
         {t('inboxFrom', { device: item.sourceName })}
@@ -546,6 +672,40 @@ export function TransfersSection(props: SectionProps) {
   )
 }
 
+const POLICY_KEY: Record<string, SwarmDropKey> = {
+  auto_accept: 'policyAutoAccept',
+  require_confirmation: 'policyConfirmed',
+  reject: 'policyRejected',
+}
+
+/**
+ * What the receive policy decided about this transfer.
+ *
+ * Only on receives — a send has no policy to evaluate — and only when the CLI
+ * actually reported one, so an older daemon that omits the field renders
+ * nothing rather than "unknown".
+ *
+ * The CLI's own wording rides along as the title rather than as the label: it
+ * is authored in Chinese inside the Rust crate, so showing it as the visible
+ * string would put untranslated copy in front of an English reader. The label
+ * comes from the decision enum, which this catalogue does translate; the
+ * verbatim reason stays reachable for anyone diagnosing.
+ */
+function PolicyNote({ row, t }: { row: TransferRow; t: Translate }) {
+  if (row.policyAction === null) return null
+  const key = POLICY_KEY[row.policyAction]
+  if (key === undefined) return null
+
+  return (
+    <div
+      style={{ ...mutedStyle, fontSize: 12 }}
+      title={row.policyReason ?? undefined}
+    >
+      {t(key)}
+    </div>
+  )
+}
+
 function TransferCard({ row, busy, onControl, t }: {
   row: TransferRow
   busy: readonly string[]
@@ -565,6 +725,7 @@ function TransferCard({ row, busy, onControl, t }: {
       <div style={mutedStyle}>
         {formatSize(row.transferredBytes)} / {formatSize(row.totalSize)}
       </div>
+      <PolicyNote row={row} t={t} />
       {row.controls.length > 0 && (
         <div style={{ display: 'flex', gap: 4 }}>
           {row.controls.map(control => (

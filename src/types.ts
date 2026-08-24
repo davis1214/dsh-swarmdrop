@@ -109,6 +109,30 @@ export interface TransferChangedData {
   readonly totalBytes: number
 }
 
+/**
+ * A paired device started sending this machine something.
+ *
+ * The receive-side twin of {@link SentData}, and a separate type rather than a
+ * `direction` field on that one: `swarmdrop/sent` means "this conversation sent
+ * something", and widening it to also mean "something arrived" would rewrite
+ * what every already-written log row asserts.
+ *
+ * **Broadcast, not attributed.** A send belongs to the conversation that
+ * started it; an arrival belongs to nobody in particular, which makes it true
+ * of every open conversation — the same reasoning `swarmdrop/inbox-received`
+ * already follows.
+ */
+export interface ReceivingData {
+  readonly version: 1
+  readonly transferId: TransferId
+  /** Device it is arriving from, as the user would name it. */
+  readonly peerName: string
+  /** `files` or `text`. */
+  readonly contentKind: string
+  readonly fileCount: number
+  readonly totalBytes: number
+}
+
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /**
@@ -135,6 +159,12 @@ declare module '@deepseek-ai/dsh-session/types' {
      * @param data - the same transfer identity and its latest display state.
      */
     'swarmdrop/transfer': TransferChangedData
+    /**
+     * Opens one transfer arriving from a paired device.
+     * @mode emit
+     * @param data - stable transfer identity and initial display state.
+     */
+    'swarmdrop/receiving': ReceivingData
   }
 }
 
@@ -153,6 +183,7 @@ const OWNED_EVENT_TYPES = [
   'swarmdrop/inbox-received',
   'swarmdrop/sent',
   'swarmdrop/transfer',
+  'swarmdrop/receiving',
 ] as const satisfies readonly (keyof SessionEventMap)[]
 
 /** Every `SessionEventMap` key this plugin declared above. */

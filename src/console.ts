@@ -165,17 +165,31 @@ function inboxOf(raw: unknown): readonly InboxRow[] {
   }))
 }
 
+/**
+ * The transfer list, newest activity first.
+ *
+ * **Re-sorted here rather than taken as the CLI returns it.** `transfer list`
+ * orders by start time ("最近开始的在前"), and SwarmDrop's Transfer List Order
+ * Contract is explicit that the key is `updatedAt`: a session started days ago
+ * and resumed a minute ago is the most relevant row on the screen, and start
+ * order buries it. The three graphical builds were reconciled onto `updatedAt`
+ * on 2026-08-12; this one was still reading start order.
+ */
 function transfersOf(raw: unknown): readonly TransferRow[] {
-  return rows(raw).map((row): TransferRow => ({
-    sessionId: text(row['sessionId']),
-    direction: text(row['direction']),
-    peerName: text(row['peerName']),
-    phase: text(row['phase']),
-    totalSize: count(row['totalSize']),
-    transferredBytes: count(row['transferredBytes']),
-    startedAt: count(row['startedAt']),
-    controls: controlsOf(row),
-  }))
+  return rows(raw)
+    .map((row): TransferRow => ({
+      sessionId: text(row['sessionId']),
+      direction: text(row['direction']),
+      peerName: text(row['peerName']),
+      phase: text(row['phase']),
+      totalSize: count(row['totalSize']),
+      transferredBytes: count(row['transferredBytes']),
+      updatedAt: count(row['updatedAt']),
+      controls: controlsOf(row),
+      policyAction: optional(row['policyAction']),
+      policyReason: optional(row['policyReason']),
+    }))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 function settingsOf(raw: unknown): readonly SettingRow[] {

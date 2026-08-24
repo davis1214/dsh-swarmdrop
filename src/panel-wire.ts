@@ -404,6 +404,54 @@ export interface NetworkAnswer {
   readonly bootstrapConnected: boolean
   /** How many peers are connected right now. */
   readonly connectedPeers: number
+  /**
+   * Whether devices on *other* networks can reach this one.
+   *
+   * Computed by the kernel, never re-derived here. The rule involves
+   * `CandidateScope`, and SwarmDrop's `shared-view` package refuses to declare
+   * `publicAddr` in its inputs for exactly this reason: having the address in
+   * hand tempts a second implementation of the judgment, and two answers to
+   * "can they reach me" is worse than none.
+   */
+  readonly publicReachable: boolean
+  /** Every infrastructure relationship, for the diagnostic layer. */
+  readonly infraLinks: readonly InfraLink[]
+}
+
+/**
+ * The relay track of one infrastructure link.
+ *
+ * `lastError` is the **verbatim** kernel string and is never translated: it is
+ * what a user pastes into an issue and diffs against a log, and a translated
+ * one loses that use (Node Status Contract).
+ */
+export type InfraRelay =
+  | { readonly kind: 'connecting' }
+  | { readonly kind: 'active'; readonly circuitAddr: string }
+  | { readonly kind: 'failed'; readonly lastError: string }
+
+/**
+ * One infrastructure relationship, as the diagnostic layer reads it.
+ *
+ * A bootstrap node is not a category a peer belongs to, it is a **role a
+ * relationship plays** — the same `NodeId` can be both a paired device and a
+ * relay. The fields here are exactly the ones `deriveInfraLinkState` consumes,
+ * which is why `firstSeen` is carried as milliseconds: the CLI answers with an
+ * ISO string, and the conversion belongs at the boundary rather than inside
+ * the judgment.
+ */
+export interface InfraLink {
+  readonly peerId: string
+  readonly scope: string
+  readonly connected: boolean
+  readonly everActive: boolean
+  readonly firstSeenMs: number
+  readonly relay: InfraRelay | null
+  /** Non-null means the user's own settings took this link out of play. */
+  readonly excluded: boolean
+  readonly roles: { readonly relayServer: boolean; readonly kadServer: boolean }
+  /** Where this link came from — `hostConfigured`, `learned`, and so on. */
+  readonly sources: readonly string[]
 }
 
 /** {@link ENDPOINT_DEVICE_FORGET} request. */

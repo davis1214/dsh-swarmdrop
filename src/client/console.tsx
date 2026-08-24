@@ -1,15 +1,29 @@
 /**
- * The SwarmDrop settings page: one nav column, one content column.
+ * The SwarmDrop settings page: a header, a tab strip, one content column.
  *
- * ## Why a nav rather than one long page
+ * ## Why a tab strip rather than a second nav column
+ *
+ * dsh's Settings already owns a vertical nav immediately to the left of this
+ * component. A second column beside it reads as one nav split in two — and the
+ * plugin's half is the weaker of the pair, since the host's rows carry icons
+ * and this one carried bare text. It also spent width the content needed: the
+ * page rendered a 128px rail so that seven short labels could sit in a column.
+ * One horizontal row costs a line of height and gives the width back.
+ *
+ * ## Why a nav at all rather than one long page
  *
  * Every section here costs a `swarmdrop` **process**, so a page that rendered
  * all seven would spawn six on open — five of them for content below the fold.
  * A nav makes "what is on screen" and "what has been fetched" the same set,
  * which is the only shape that keeps the no-polling rule affordable.
  *
- * The one section that costs nothing is Overview: it reads the panel's store,
- * which is already being fed. That is why it is the landing page.
+ * Overview is the cheapest, and that is why it is the landing page: the device
+ * table and node liveness are read straight out of the panel's store, which is
+ * already being fed. It is no longer entirely free — opening it asks for
+ * network posture once, because that half of the store is filled only while
+ * the *sidebar* panel is open, so a user who lives in Settings would otherwise
+ * find the Network section permanently blank. One process on open, and only
+ * again when the user asks; still not a schedule.
  *
  * ## The page cannot open itself
  *
@@ -20,8 +34,10 @@
  * changing the receive directory) has to be findable from Settings alone.
  */
 
-import { useCallback, useEffect, useState, type CSSProperties } from 'react'
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import {
+  Button, IconCheckOutline16, IconCloseOutline16, IconWarningOutline16,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { HostObservable, InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the settings shell's SlotMap declaration (the
 // 'settings.section' entry) into this program so `PropsRuntime` below resolves
@@ -32,7 +48,7 @@ import {
   AboutSection, BootstrapSection, InboxSection, InvitesSection, OverviewSection,
   SettingsSection, TransfersSection, type SectionProps,
 } from './console-sections.js'
-import { errorStyle, mutedStyle, noticeStyle, pageStyle } from './console-ui.js'
+import { ConsoleHeader, SectionTabs, pageStyle } from './console-ui.js'
 import type { ConsoleState } from './console-port.js'
 import type { ConsoleAction, ConsoleSection } from '../console-wire.js'
 import type { PairQrAnswer } from '../panel-wire.js'
@@ -51,6 +67,11 @@ export interface SwarmDropConsoleFace {
   onOpenSection(section: ConsoleSection): void
   /** Fetch a section because the user asked. */
   onRefresh(section: ConsoleSection): void
+  /**
+   * Read network posture once. See `PanelPort.refreshNetwork` for why the
+   * console needs its own door to this and cannot use `setOpen`.
+   */
+  onRefreshNetwork(): void
   onAct(action: ConsoleAction): void
   /** Drop a notice or an error the user has read. */
   onDismiss(): void
@@ -88,21 +109,13 @@ const PAGES: readonly { readonly page: Page; readonly label: SwarmDropKey }[] = 
   { page: 'about', label: 'navAbout' },
 ]
 
-const layoutStyle: CSSProperties = {
-  display: 'flex',
-  gap: 20,
-  alignItems: 'flex-start',
+/** The dictionary key for one page, for naming its panel. */
+function labelOf(page: Page): SwarmDropKey {
+  const entry = PAGES.find(candidate => candidate.page === page)
+  // Unreachable: `Page` is exactly the set PAGES enumerates. Falling back to
+  // the landing page's key keeps this total rather than asserting.
+  return entry?.label ?? 'navOverview'
 }
-
-const navStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 2,
-  minWidth: 128,
-  flexShrink: 0,
-}
-
-const contentStyle: CSSProperties = { flex: 1, minWidth: 0 }
 
 const bannerStyle: CSSProperties = {
   display: 'flex',
@@ -115,12 +128,18 @@ const bannerStyle: CSSProperties = {
 }
 
 export function SwarmDropConsole({
-  usePanel, useConsole, onOpenSection, onRefresh, onAct, onDismiss,
+  usePanel, useConsole, onOpenSection, onRefresh, onRefreshNetwork, onAct, onDismiss,
   onStartNode, onStopNode, onForget, onBeginPair, onCancelPair, onQr, t,
 }: SwarmDropConsoleProps) {
   const panel = usePanel(snapshot => snapshot)
   const consoleState = useConsole(snapshot => snapshot)
   const [page, setPage] = useState<Page>('overview')
+
+  // Rebuilt when the locale changes, which is what `t` changing means.
+  const tabs = useMemo(
+    () => PAGES.map(entry => ({ id: entry.page, label: t(entry.label) })),
+    [t],
+  )
 
   // Opening a page is what fetches it. The port skips a section already in
   // hand, so switching back and forth costs nothing.
@@ -142,44 +161,55 @@ export function SwarmDropConsole({
       {/* Above everything it qualifies, because it qualifies everything: while
           the subscription is down these are the last facts it sent. */}
       {panel.subscription !== null && (
-        <div style={{ ...bannerStyle, color: 'var(--dsw-alias-state-warning-primary)' }}>
+        <div style={{ ...bannerStyle, color: 'var(--dsw-alias-state-warn-primary)' }}>
           <span title={panel.subscription}>{t('stale')}</span>
         </div>
       )}
-      {consoleState.error !== null && (
-        <Banner style={errorStyle} text={consoleState.error} onDismiss={dismiss} t={t} />
-      )}
-      {consoleState.actionError !== null && (
-        <Banner style={errorStyle} text={consoleState.actionError} onDismiss={dismiss} t={t} />
-      )}
-      {consoleState.notice !== null && (
-        <Banner style={noticeStyle} text={consoleState.notice} onDismiss={dismiss} t={t} />
-      )}
+      {/* Liveness and start/stop live here rather than on Overview: every
+          other page is a consequence of the node being up, so a user reading a
+          failure on Inbox should not have to change tabs to learn whether the
+          node is running. See `ConsoleHeader` for why nothing costlier joins
+          them. */}
+      <ConsoleHeader
+        panel={panel}
+        t={t}
+        onStartNode={onStartNode}
+        onStopNode={onStopNode}
+      />
 
-      <div style={layoutStyle}>
-        <nav style={navStyle} aria-label={t('name')}>
-          {PAGES.map(entry => (
-            <Button
-              key={entry.page}
-              variant={entry.page === page ? 'outline' : 'ghost'}
-              size="sm"
-              aria-current={entry.page === page}
-              onClick={() => { setPage(entry.page) }}
-              style={{ justifyContent: 'flex-start' }}
-            >
-              {t(entry.label)}
-            </Button>
-          ))}
-        </nav>
+      <SectionTabs
+        items={tabs}
+        current={page}
+        onSelect={setPage}
+        label={t('name')}
+      />
 
-        <div style={contentStyle}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        {/* Under the tabs rather than above the header: what lands here is a
+            failure or a receipt belonging to the page the user is on, and a
+            section's error pushing the whole console down reads as the plugin
+            being broken rather than one request having failed. The subscription
+            notice above stays where it is — that one really does qualify all
+            seven. */}
+        {consoleState.error !== null && (
+          <Banner tone="error" text={consoleState.error} onDismiss={dismiss} t={t} />
+        )}
+        {consoleState.actionError !== null && (
+          <Banner tone="error" text={consoleState.actionError} onDismiss={dismiss} t={t} />
+        )}
+        {consoleState.notice !== null && (
+          <Banner tone="notice" text={consoleState.notice} onDismiss={dismiss} t={t} />
+        )}
+
+        {/* One panel is mounted at a time, which is the same set as "one
+            section has been fetched" — see the note at the top of the file. */}
+        <div role="tabpanel" aria-label={t(labelOf(page))}>
           {page === 'overview' && (
             <OverviewSection
               panel={panel}
               t={t}
-              onStartNode={onStartNode}
-              onStopNode={onStopNode}
               onForget={onForget}
+              onRefreshNetwork={onRefreshNetwork}
             />
           )}
           {/* Pairing lives on this page rather than on Overview: an invite
@@ -208,24 +238,85 @@ export function SwarmDropConsole({
 }
 
 /**
- * One dismissible line above the page.
+ * One dismissible message belonging to the page under it.
  *
  * Dismissible rather than auto-expiring: the two things that land here are an
  * export destination and a failure, and both are things the user may need to
  * read twice or copy out.
+ *
+ * ## Three things this shape is answering
+ *
+ * **The dismiss control is an icon.** It was the word "dismiss", and a long
+ * message left it no width — flex handed the text every pixel and the label
+ * wrapped one character per line down the right edge. An icon button cannot
+ * wrap. The word survives as its accessible name.
+ *
+ * **The text scrolls past a point.** A `swarmdrop` error is whatever the CLI
+ * said, and the CLI is capable of listing every variant it accepts in one line
+ * (see the `unknown variant` family). Unbounded, one of those fills the panel
+ * and pushes the page it is about off screen. Bounded, it is still complete —
+ * scrolled, not truncated, so nothing is silently dropped.
+ *
+ * **Tone is carried by the icon, not by colouring the message.** The body was
+ * entirely red, and a wall of red is harder to read than ordinary text — which
+ * matters here, because this is the CLI's own wording and that is where the
+ * instructions live ("run `swarmdrop stop` then `swarmdrop start`" arrives
+ * inside one of these). A tinted ground is not the alternative either: dsh has
+ * no `state-error-tertiary`, and `-secondary` is a mid-saturation red that
+ * nothing dark reads well against. A coloured left stripe is not on the table.
+ * So: neutral ground, red glyph, readable text, and `role="alert"` to say in
+ * the accessibility tree what the colour says on screen.
  */
-function Banner({ style, text, onDismiss, t }: {
-  style: CSSProperties
+function Banner({ tone, text, onDismiss, t }: {
+  tone: 'error' | 'notice'
   text: string
   onDismiss: () => void
   t: SwarmDropConsoleProps['t']
 }) {
+  const error = tone === 'error'
   return (
-    <div style={{ ...bannerStyle, ...style }}>
-      <span style={{ minWidth: 0, wordBreak: 'break-word' }}>{text}</span>
-      <Button variant="ghost" size="sm" onClick={onDismiss} style={mutedStyle}>
-        {t('dismiss')}
-      </Button>
+    <div
+      role={error ? 'alert' : 'status'}
+      style={bannerStyle}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          flexShrink: 0,
+          display: 'inline-flex',
+          marginTop: 1,
+          color: error
+            ? 'var(--dsw-alias-state-error-primary)'
+            : 'var(--dsw-alias-state-success-primary)',
+        }}
+      >
+        {error ? <IconWarningOutline16 /> : <IconCheckOutline16 />}
+      </span>
+      {/* A whole number of lines. An arbitrary pixel cap cuts the last visible
+          line in half, which reads as a rendering fault rather than as "there
+          is more" — and the half-line is where the CLI's remedy tends to sit,
+          because it puts the instruction after the diagnosis. Ten lines clears
+          every error this plugin has actually produced; longer ones scroll. */}
+      <span
+        style={{
+          flex: 1,
+          minWidth: 0,
+          wordBreak: 'break-word',
+          maxHeight: 'calc(1.6em * 10)',
+          overflowY: 'auto',
+        }}
+      >
+        {text}
+      </span>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={onDismiss}
+        title={t('dismiss')}
+        aria-label={t('dismiss')}
+        style={{ flexShrink: 0 }}
+        icon={<IconCloseOutline16 />}
+      />
     </div>
   )
 }

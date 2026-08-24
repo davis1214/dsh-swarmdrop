@@ -23,33 +23,37 @@
  * the Context pending rather than inventing one.
  */
 
-import { createElement, type CSSProperties } from 'react'
+import type { CSSProperties } from 'react'
 import type {
   ConversationLocation, ConversationNodeContext, ConversationNodeDefinition,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ChatNodeKind, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import { formatDuration, formatSize } from './format.js'
 import type { LiveSnapshot, LiveTransfer, LiveTransfersFace } from './live-transfers.js'
 import type { TransferControlAction } from '../panel-wire.js'
 import { controlsOf } from '../console-wire.js'
+import type { SwarmDropKey } from './locales.js'
 
 /**
- * A keyed chat renderer's props, minus the locale.
+ * A keyed chat renderer's props, with this plugin's own translator.
  *
- * ⚠️ **`ChatNodeViewProps` itself does not compile for a third-party plugin**,
- * and the conversation-node cookbook's own snippet has the same problem: that
- * type bundles `t: TranslateNS<'conversation'>`, but the slot only injects `t`
- * when the registration passes `locale`, and the value first-party code passes
- * (`NS` from ui-conversation's `locales.ts`) is not exported. A plugin bringing
- * its own namespace would get `TranslateNS<'its-own'>`, which is a different
- * type again.
+ * ⚠️ **`ChatNodeViewProps` itself does not compile for a third-party plugin.**
+ * That type bundles `t: TranslateNS<'conversation'>`, and the value first-party
+ * code passes for it (`NS` from ui-conversation's `locales.ts`) is not
+ * exported. So the bundled `t` is dropped and replaced with the one this
+ * plugin's own namespace produces — which is what the registration passes
+ * (`locale: NS` in `index.ts`), so the substitution matches what actually
+ * arrives at runtime rather than papering over it with a cast.
  *
- * Omitting `t` is the honest resolution rather than a cast: these rows render
- * device names and byte counts, so there is nothing here to translate. If that
- * changes, the answer is this plugin's own locale namespace — not borrowing
- * `conversation`'s.
+ * This used to omit `t` entirely, on the grounds that these rows render only
+ * device names and byte counts. They no longer do: a direction, a file count,
+ * an outcome and three control verbs are all copy, and they were all hardcoded
+ * English.
  */
-type NodeProps<K extends ChatNodeKind> = Omit<ChatNodeViewProps<K>, 't'>
+type NodeProps<K extends ChatNodeKind> = Omit<ChatNodeViewProps<K>, 't'> & {
+  t: PropsLocale<'swarmdrop'>['t']
+}
 
 /**
  * The transfer row's props: the log's node, plus the live face.
@@ -62,13 +66,24 @@ type TransferRowProps = NodeProps<'swarmdrop-transfer'> & {
   onControl: LiveTransfersFace['onControl']
 }
 
-/** A count and its noun, without the "1 files" that gives away a machine. */
-function plural(count: number, noun: string): string {
-  return `${String(count)} ${noun}${count === 1 ? '' : 's'}`
+/** Outcome word for a finished transfer. The CLI's values are not read by people. */
+const REASON_KEY: Readonly<Record<string, SwarmDropKey>> = {
+  completed: 'reasonCompleted',
+  cancelled: 'reasonCancelled',
+  rejected: 'reasonRejected',
+  expired: 'reasonExpired',
 }
 
 /** What the transfer row shows. */
 export interface TransferChatData {
+  /**
+   * `send` | `receive`.
+   *
+   * Derived from which event opened the row, never carried on the update:
+   * a transfer does not change direction, and a replayed log from before this
+   * field existed opens through `swarmdrop/sent`, which can only mean `send`.
+   */
+  readonly direction: string
   readonly peerName: string
   readonly fileCount: number
   readonly totalBytes: number
@@ -103,7 +118,10 @@ export const transferDefinition: ConversationNodeDefinition<TransferState> = {
   kind: 'swarmdrop-transfer',
   target: 'chat',
   match: (event) => {
-    if (event.type === 'swarmdrop/sent') {
+    // Two start events, one family: a send and an arrival are the same object
+    // moving in opposite directions, and giving them separate node kinds would
+    // mean two renderers to keep in step for one progress bar.
+    if (event.type === 'swarmdrop/sent' || event.type === 'swarmdrop/receiving') {
       return { id: event.data.transferId, role: 'start' }
     }
     if (event.type === 'swarmdrop/transfer') {
@@ -112,16 +130,20 @@ export const transferDefinition: ConversationNodeDefinition<TransferState> = {
     return null
   },
   start: (_context, match) => {
-    if (match.event.type !== 'swarmdrop/sent') {
-      throw new Error('swarmdrop-transfer requires swarmdrop/sent')
+    const { event } = match
+    if (event.type !== 'swarmdrop/sent' && event.type !== 'swarmdrop/receiving') {
+      throw new Error('swarmdrop-transfer requires swarmdrop/sent or swarmdrop/receiving')
     }
-    const data = match.event.data
+    const data = event.data
     return {
+      direction: event.type === 'swarmdrop/sent' ? 'send' : 'receive',
       peerName: data.peerName,
       fileCount: data.fileCount,
       totalBytes: data.totalBytes,
       transferredBytes: 0,
-      phase: 'offered',
+      // An arrival is already moving when this machine hears about it; a send
+      // has been offered and not yet answered.
+      phase: event.type === 'swarmdrop/sent' ? 'offered' : 'active',
     }
   },
   update: (context, match) => {
@@ -211,8 +233,12 @@ export const receivedDefinition: ConversationNodeDefinition<ReceivedState> = {
  * three always and letting the CLI refuse would teach the user that these
  * buttons sometimes do nothing.
  */
-export function TransferRow({ node, useLive, onControl }: TransferRowProps) {
-  const { peerName, fileCount, totalBytes, transferredBytes, phase, terminalReason } = node.data
+export function TransferRow({ node, useLive, onControl, t }: TransferRowProps) {
+  const { direction, peerName, fileCount, totalBytes, transferredBytes, phase, terminalReason } = node.data
+  // Rows for both directions sit in one transcript, so the arrow is the first
+  // thing that has to distinguish them — before the device name, which is the
+  // same word whichever way the bytes went.
+  const inbound = direction === 'receive'
   const live = useLive(snapshot => snapshot[node.id])
 
   const shown = live ?? {
@@ -234,21 +260,33 @@ export function TransferRow({ node, useLive, onControl }: TransferRowProps) {
     ? Math.min(100, Math.floor((shown.transferredBytes / total) * 100))
     : 0
 
+  const progress = t('rowProgress', {
+    done: formatSize(shown.transferredBytes),
+    total: formatSize(total),
+  })
+  const outcomeKey = terminalReason === undefined ? undefined : REASON_KEY[terminalReason]
   const detail = done
     ? terminalReason === 'completed'
-      ? `sent ${plural(fileCount, 'file')} · ${formatSize(totalBytes)}`
-      : `${terminalReason ?? 'ended'} · ${formatSize(shown.transferredBytes)} of ${formatSize(total)}`
+      ? [
+          t(inbound ? 'rowReceived' : 'rowSent'),
+          t('rowFiles', { count: fileCount }),
+          formatSize(totalBytes),
+        ].join(' · ')
+      // An unknown reason falls through to the CLI's own word rather than to
+      // "ended": a value this catalogue has not caught up with is still more
+      // informative than a euphemism for it.
+      : `${outcomeKey === undefined ? terminalReason ?? t('rowEnded') : t(outcomeKey)} · ${progress}`
     : [
-        `${formatSize(shown.transferredBytes)} of ${formatSize(total)}`,
-        shown.speed === null ? null : `${formatSize(shown.speed)}/s`,
-        shown.eta === null ? null : `${formatDuration(shown.eta)} left`,
+        progress,
+        shown.speed === null ? null : t('rowRate', { rate: formatSize(shown.speed) }),
+        shown.eta === null ? null : t('rowLeft', { duration: formatDuration(shown.eta) }),
       ].filter(part => part !== null).join(' · ')
 
   return (
     <div className="swarmdrop-row" style={rowStyle}>
       <div style={headStyle}>
-        <span>→ {peerName} · {detail}</span>
-        {live !== undefined && !done && <Controls live={live} id={node.id} onControl={onControl} />}
+        <span>{inbound ? '←' : '→'} {peerName} · {detail}</span>
+        {live !== undefined && !done && <Controls live={live} id={node.id} onControl={onControl} t={t} />}
       </div>
       {/* The bar is for the live half only: a finished transfer's bar is either
           a full one nobody needs or, worse, a partial one implying it is still
@@ -262,16 +300,16 @@ export function TransferRow({ node, useLive, onControl }: TransferRowProps) {
   )
 }
 
-/** English labels; a conversation row has no locale (see {@link NodeProps}). */
-const CONTROL_LABEL: Readonly<Record<TransferControlAction, string>> = {
-  pause: 'Pause',
-  resume: 'Resume',
-  cancel: 'Cancel',
+const CONTROL_KEY: Readonly<Record<TransferControlAction, SwarmDropKey>> = {
+  pause: 'ctrlPause',
+  resume: 'ctrlResume',
+  cancel: 'ctrlCancel',
 }
 
 /** The buttons for one live transfer. */
-function Controls({ live, id, onControl }: {
+function Controls({ live, id, onControl, t }: {
   live: LiveTransfer
+  t: PropsLocale<'swarmdrop'>['t']
   id: string
   onControl: (transferId: string, action: TransferControlAction) => void
 }) {
@@ -298,7 +336,7 @@ function Controls({ live, id, onControl }: {
           // the user to click it again.
           style={live.busy ? { ...buttonStyle, opacity: 0.5, cursor: 'default' } : buttonStyle}
         >
-          {CONTROL_LABEL[action]}
+          {t(CONTROL_KEY[action])}
         </button>
       ))}
     </span>
@@ -308,6 +346,12 @@ function Controls({ live, id, onControl }: {
 /** Inline styles, for the reason `panel.tsx` gives at length: this bundle ships
  * no stylesheet, and dsh's own custom properties carry the theme. */
 const rowStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4 }
+
+/** A quieter second line under a row's headline. */
+const hintStyle: CSSProperties = {
+  fontSize: 12,
+  color: 'var(--dsw-alias-label-tertiary)',
+}
 
 const headStyle: CSSProperties = {
   display: 'flex',
@@ -323,28 +367,50 @@ const buttonStyle: CSSProperties = {
   fontSize: 11,
   padding: '2px 8px',
   borderRadius: 4,
-  border: '1px solid var(--dsw-alias-border-secondary)',
+  border: '1px solid var(--dsw-alias-border-l2)',
   background: 'transparent',
   color: 'var(--dsw-alias-label-secondary)',
   cursor: 'pointer',
 }
 
+// ⚠️ dsh defines no `fill-*` alias and no `border-secondary`. These three
+// declarations named tokens that do not exist, so the bar rendered fully
+// transparent and the button lost its outline. See `panel.tsx` for the same
+// fix and `dev-notes/dsh-seams.md` for how to catch this class of thing.
 const trackStyle: CSSProperties = {
   height: 3,
   borderRadius: 2,
-  background: 'var(--dsw-alias-fill-tertiary)',
+  background: 'var(--dsw-alias-border-l2)',
   overflow: 'hidden',
 }
 
 const fillStyle: CSSProperties = {
   height: '100%',
-  background: 'var(--dsw-alias-fill-brand)',
+  background: 'var(--dsw-alias-state-business-primary)',
   transition: 'width 200ms linear',
 }
 
 /** One arrival from a paired device. */
-export function ReceivedRow({ node }: NodeProps<'swarmdrop-received'>) {
+export function ReceivedRow({ node, t }: NodeProps<'swarmdrop-received'>) {
   const { sourceName, itemCount, totalSize, contentKind } = node.data
-  const what = contentKind === 'text' ? 'a message' : `${String(itemCount)} file(s) · ${formatSize(totalSize)}`
-  return createElement('p', { className: 'swarmdrop-row' }, `← ${sourceName} sent ${what}`)
+  const what = contentKind === 'text'
+    ? t('rowMessage')
+    : `${t('rowFiles', { count: itemCount })} · ${formatSize(totalSize)}`
+
+  return (
+    <div className="swarmdrop-row" style={rowStyle}>
+      <div style={headStyle}>
+        <span>← {sourceName} · {what}</span>
+      </div>
+      {/* The one thing the transfer row above cannot say. Both rows describe
+          the same arrival — same device, same size — and after the progress row
+          landed, repeating that was all this one did. What is different about
+          this moment is that the item is now *addressable*: it has an inbox id,
+          so it can be pulled into the next message. Someone whose conversation
+          opened midway through the transfer never saw the progress row at all,
+          which is why this still states what arrived rather than only that it
+          can be referenced. */}
+      <div style={hintStyle}>{t('rowInInbox')}</div>
+    </div>
+  )
 }

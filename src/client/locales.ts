@@ -26,11 +26,78 @@ export const NS = 'swarmdrop'
 /** Simplified Chinese panel copy (source). */
 export const zh = {
   name: 'SwarmDrop',
+  /** 页头副标题。说这条通道是什么，不说它有多好。 */
+  tagline: '在 DSH 与你自己的设备之间传文件',
 
   node: '节点',
   nodeRunning: '运行中',
   nodeStopped: '已停止',
   nodeUnknown: '读取中…',
+
+  /**
+   * 结论层那**一句话**。措辞由 SwarmDrop `DESIGN.md` 的 Node Status Contract
+   * 逐字定死，四端（本插件是第四个）必须一致。
+   *
+   * **必须是后果句，不能是形容词。** 「良好」「受限」这类没有主语的词说不出
+   * 「谁能不能连到我」，而那才是用户打开这里要问的唯一问题。
+   */
+  healthNotRunning: '节点未运行',
+  healthStarting: '正在连接网络…',
+  healthReachable: '其他网络的设备可以连到你',
+  healthLanReachable: '只有同一网络里的设备能连到你',
+  healthConfiguredLanOnly: '你关闭了公网可达性，其他网络的设备找不到你',
+  healthIsolated: '连不上任何网络，检查引导节点',
+
+  /** 结论层：已配对多少台、其中多少台在线。 */
+  pairedSummary: '已配对 {paired} · 在线 {online}',
+
+  /** 单条基础设施关系的状态词，同样由契约定死。 */
+  linkSeedOnly: '仅 DHT 种子',
+  linkExcluded: '已按设置排除',
+  linkSettling: '正在连接',
+  linkOk: '已就绪',
+  linkLost: '连接已断',
+  linkUnreachable: '连不上',
+  /** 诊断层里那张表的标题。 */
+  infraLinks: '引导 / 中继关系',
+  copyError: '复制错误信息',
+
+  /**
+   * 接收策略的判定结果。
+   *
+   * **这条在命令行宿主上格外值得说**：新配对设备的默认档位带 `require_confirmation`，
+   * 而常驻节点没有终端可以举着确认框，于是它替用户答了「接受」。桌面端会停下来问的
+   * 那一次，这里是自动过的——是有意的取舍，但用户看不见就无从知道取舍发生过。
+   */
+  policyAutoAccept: '按设备策略自动接收',
+  policyConfirmed: '策略本要求确认，由常驻节点代答',
+  policyRejected: '按设备策略拒绝',
+
+  /**
+   * 会话行的文案。
+   *
+   * 这些串此前是硬编码英文——`nodes.tsx` 当时的理由是「这些行只画设备名和字节数，
+   * 没什么可翻译的」。加上方向词、文件计数、结束原因与三个控制动词之后，那个前提
+   * 不再成立，于是按那条注释自己给出的答案办：用本插件自己的 namespace，而不是去借
+   * `conversation` 的。
+   */
+  rowSent: '已发送',
+  rowReceived: '已接收',
+  rowFiles: '{count} 个文件',
+  rowMessage: '一条消息',
+  rowProgress: '{done} / {total}',
+  rowRate: '{rate}/s',
+  rowLeft: '剩余 {duration}',
+  rowInInbox: '已进收件箱，可用 @ 引用',
+  /** 传输的结束原因。CLI 给的是枚举，不是给人读的词。 */
+  rowEnded: '已结束',
+  reasonCompleted: '已完成',
+  reasonCancelled: '已取消',
+  reasonRejected: '被拒绝',
+  reasonExpired: '已过期',
+  ctrlPause: '暂停',
+  ctrlResume: '继续',
+  ctrlCancel: '取消',
   start: '启动',
   stop: '停止',
 
@@ -47,6 +114,14 @@ export const zh = {
   listenCount: '{count} 个',
 
   devices: '已配对设备',
+  /**
+   * 设备在线状态的三个词。**「未知」绝不能写成「离线」**——见本文件顶部的
+   * 词汇规则，以及 SwarmDrop `DESIGN.md` 的 Device Card Contract：在线状态
+   * 必须「既有点也有词」，光一个彩色圆点不算数。
+   */
+  deviceOnline: '在线',
+  deviceOffline: '离线',
+  deviceUnknownState: '未知',
   noDevices: '还没有配对任何设备',
   forget: '解除',
   forgetConfirm: '确认解除',
@@ -86,6 +161,8 @@ export const zh = {
   inbox: '收件箱',
   inboxCount: '{count} 项',
   inboxMore: '更多在设置 → SwarmDrop 里',
+  inboxFiles: '{count} 个文件',
+  inboxText: '一条消息',
 
   inFlight: '正在传输',
   transferSending: '发往',
@@ -199,11 +276,51 @@ export type SwarmDropKey = keyof typeof zh
 /** English panel copy. */
 export const en = {
   name: 'SwarmDrop',
+  tagline: 'Move files between DSH and your own devices',
 
   node: 'Node',
   nodeRunning: 'Running',
   nodeStopped: 'Stopped',
   nodeUnknown: 'Checking…',
+
+  healthNotRunning: 'Node is not running',
+  healthStarting: 'Connecting to the network…',
+  healthReachable: 'Devices on other networks can reach you',
+  healthLanReachable: 'Only devices on your network can reach you',
+  healthConfiguredLanOnly: "Public reachability is off, so devices on other networks can't find you",
+  healthIsolated: "Can't reach any network - check your bootstrap nodes",
+
+  pairedSummary: 'Paired {paired} · online {online}',
+
+  linkSeedOnly: 'DHT seed only',
+  linkExcluded: 'Excluded by settings',
+  linkSettling: 'Connecting',
+  linkOk: 'Ready',
+  linkLost: 'Connection lost',
+  linkUnreachable: 'Unreachable',
+  infraLinks: 'Bootstrap / relay links',
+  copyError: 'Copy the error',
+
+  policyAutoAccept: 'Auto-accepted by device policy',
+  policyConfirmed: 'Policy asked for confirmation; the resident node answered',
+  policyRejected: 'Rejected by device policy',
+
+  rowSent: 'sent',
+  rowReceived: 'received',
+  rowFiles: '{count} file(s)',
+  rowMessage: 'a message',
+  rowProgress: '{done} of {total}',
+  rowRate: '{rate}/s',
+  rowLeft: '{duration} left',
+  rowInInbox: 'In your inbox — reference it with @',
+  rowEnded: 'ended',
+  reasonCompleted: 'completed',
+  reasonCancelled: 'cancelled',
+  reasonRejected: 'rejected',
+  reasonExpired: 'expired',
+  ctrlPause: 'Pause',
+  ctrlResume: 'Resume',
+  ctrlCancel: 'Cancel',
   start: 'Start',
   stop: 'Stop',
 
@@ -220,6 +337,9 @@ export const en = {
   listenCount: '{count}',
 
   devices: 'Paired devices',
+  deviceOnline: 'Online',
+  deviceOffline: 'Offline',
+  deviceUnknownState: 'Unknown',
   noDevices: 'No devices paired yet',
   forget: 'Unpair',
   forgetConfirm: 'Confirm',
@@ -259,6 +379,8 @@ export const en = {
   inbox: 'Inbox',
   inboxCount: '{count}',
   inboxMore: 'More in Settings → SwarmDrop',
+  inboxFiles: '{count} file(s)',
+  inboxText: 'A message',
 
   inFlight: 'In flight',
   transferSending: 'To',

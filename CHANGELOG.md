@@ -8,6 +8,129 @@ nothing written down does not get published.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-08-24
+
+### Changed
+
+- The settings page is now a header, a tab strip and one content column. It
+  used to place its own vertical nav beside dsh's, which read as one nav split
+  in two and spent 128px of the content's width on seven short labels.
+- Node liveness and start/stop moved from Overview into the page header, where
+  every tab can see them. Nothing costlier joined them: the header mounts under
+  all seven pages, and the plugin version and CLI path each cost a `swarmdrop`
+  process, so they stay on About.
+- Group titles are plain 13px headings. They were 11px uppercase with letter
+  spacing, and seven groups each wore one.
+- Errors and receipts render under the tabs rather than above the header, and
+  the dismiss control is an icon. A long message used to leave the word
+  "dismiss" no width, so it wrapped one character per line down the edge.
+- Error text is ordinary weight on a neutral ground with a red glyph, instead
+  of a wall of red. The CLI puts its remedy at the end of the message, which is
+  the part a reader has to get through the diagnosis to reach.
+
+- The sidebar panel shows the node id and the public address on one elided
+  line each, with a button that copies them. In full they took two lines and
+  four, could not be copied out of, and the address alone was a quarter of the
+  panel's height.
+- Expanding the panel's inbox now shows size and arrival time per entry, in
+  the sender-and-time-over-summary shape a mail client uses. It listed the
+  device name and a count, which is what made the expansion not worth the
+  click — `PanelInboxEntry` was already carrying `totalSize`, `receivedAt` and
+  `contentKind`, and none of the three were drawn.
+- **Conversation rows speak the user's language.** Direction, file counts, the
+  outcome word, the progress line and the pause/resume/cancel buttons were all
+  hardcoded English. `nodes.tsx` had argued that these rows "render device names
+  and byte counts, so there is nothing here to translate" — true when it was
+  written, and no longer true — and named the fix itself: this plugin's own
+  locale namespace rather than borrowing `conversation`'s. That is what the
+  registration now passes.
+- **An arriving transfer now grows a row in the conversation while it is
+  arriving.** Only transfers this plugin started were ever attributed to a
+  session, so a device pushing files at this machine produced nothing at all
+  until it had finished — the transcript was silent for the whole transfer,
+  which reads exactly like nothing happening. Arrivals broadcast to every root
+  conversation, on the same reasoning `swarmdrop/inbox-received` already
+  followed: a send belongs to the conversation that started it, an arrival
+  belongs to nobody in particular. The row carries the same progress bar, rate,
+  time remaining and pause/resume/cancel controls the send row has, and leads
+  with `←` rather than `→`.
+- The inbox row says what only it can say — that the item is now addressable
+  with `@`. It repeated the device, count and size the transfer row above it had
+  just shown, and gained a structured layout in place of one line of text.
+- Transfer rows in Settings state what the receive policy decided
+  (`policyAction`), with the CLI's own wording behind the title attribute. On
+  this host that is worth surfacing: a newly paired device defaults to
+  `Collaborator`, which asks for confirmation, and the resident node answers on
+  the user's behalf because there is no terminal to hold a prompt. A row reading
+  "received" may be one a desktop build would have stopped to ask about.
+- The header states **reachability as a consequence**, not an adjective:
+  "devices on other networks can reach you" rather than "good" or "limited".
+  The six-tier ladder is copied from SwarmDrop's `shared-view` package, which
+  this repository cannot import (it is `private: true` and unpublished), so
+  `node-health.ts` is its third implementation and carries tests pinning the
+  tier order and the three-part grace rule rather than the wording.
+- The header states paired and online counts, the conclusion layer's third slot.
+- The network disclosure lists every bootstrap/relay link with its status word,
+  attribution (scope · sources · roles) and, when a relay has failed, the
+  kernel's **verbatim** `lastError` behind a copy button. The contract forbids
+  translating it: it is what a user pastes into an issue.
+- Network facts on Overview collapse into one disclosure, closed by default,
+  whose collapsed row still states relay readiness. SwarmDrop's Node Status
+  Contract fixes this split: a conclusion layer that is always visible, and one
+  collapsed disclosure for the diagnostics. Expanded, this machine lists 17
+  listen addresses.
+- Paired devices state their online status as a **word** beside the dot, in
+  both surfaces. The Device Card Contract's third slot is explicit that "a bare
+  colored dot does not satisfy this"; the state had been encoded in colour
+  alone, which a screen reader cannot read at all.
+- Panel group titles are 12px secondary rather than 11px tertiary uppercase.
+  `text-transform` does nothing to the Chinese these read in, so all it bought
+  was the lowest-contrast text on the panel for the elements meant to be
+  scannable.
+
+### Fixed
+
+- The dictionaries were registered inside the panel's `['connection', 'locale']`
+  fiber, tying this plugin's copy to a service that has nothing to do with copy:
+  a deployment with `locale` but no `connection` got conversation rows and no
+  words for them. They now register under `locale` alone.
+- **The Network section was permanently empty for anyone who only opened
+  Settings.** `network` is filled by a timer that `PanelPort.setOpen` starts,
+  and `setOpen` is called by the sidebar panel — which the settings console is
+  not. The console now has its own one-shot read (`refreshNetwork`), which does
+  not claim the panel is open and does not start the timer: two surfaces sharing
+  one boolean would have the first to close stop polling for the one still
+  watching.
+- The transfer list sorts by `updatedAt`, not by the start order the CLI returns.
+  Per the Transfer List Order Contract: a session started three days ago and
+  resumed a minute ago is the most relevant row on the screen, and start order
+  buries it. The three graphical builds were reconciled onto this key on
+  2026-08-12; this one had not been.
+- **Six design tokens did not exist and had been failing silently.** An
+  unresolved `var()` falls back to the inherited value or to nothing, which
+  looks like a design decision:
+  - `fill-tertiary` and `fill-brand` (dsh has no `fill-*` at all) drew the
+    transfer progress bar as a transparent groove with a transparent fill. An
+    invisible bar looks exactly like a transfer that is not moving.
+  - `state-warning-primary` (the token is `state-warn-*`) left the
+    stale-subscription notice and one panel warning in the body colour.
+  - `bg-primary` left every text input without a background of its own.
+  - `border-secondary` left a button without its outline.
+- Tab selection and the progress fill ride `--dsw-alias-state-business-primary`.
+  `brand-primary` exists but resolves to neutral ink in dsh's sheet, so an
+  underline drawn with it is indistinguishable from text; dsh's own conversation
+  tabs moved off it for the same reason.
+
+### Added
+
+- The tab strip follows the WAI-ARIA tabs pattern: `role="tab"`, arrow keys,
+  Home and End, and a roving `tabIndex` so one stop covers the strip.
+- `scripts/check-tokens.mjs` fails the build on a `--dsw-*` name dsh does not
+  define, checked against the installed theme package rather than a list kept
+  here. It runs as part of `typecheck`, so CI covers it. The one case it cannot
+  catch is a token that exists and resolves to something unexpected —
+  `brand-primary` above; DESIGN.md carries that one.
+
 ## [0.6.0] - 2026-08-22
 
 ### Changed
@@ -286,7 +409,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 First release: tools, the `/swarmdrop` command, conversation rows for transfers
 and received items, and the `@` inbox source.
 
-[Unreleased]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.1.1...v0.2.0

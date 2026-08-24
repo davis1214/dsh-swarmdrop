@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { versionSkew } from './format.js'
+import { isSameLocalDay, versionSkew } from './format.js'
 
 /**
  * The About page's version comparison.
@@ -58,5 +58,35 @@ describe('versionSkew', () => {
   it('says nothing when the binary itself could not be read', () => {
     expect(versionSkew(null, { state: 'known', version: '0.6.0' }))
       .toEqual({ kind: 'aligned' })
+  })
+})
+
+describe('isSameLocalDay', () => {
+  it('separates two instants that share a day from ones that do not', () => {
+    const morning = new Date(2026, 7, 24, 9, 30).getTime()
+    const evening = new Date(2026, 7, 24, 23, 59).getTime()
+    const nextDay = new Date(2026, 7, 25, 0, 1).getTime()
+
+    expect(isSameLocalDay(morning, evening)).toBe(true)
+    expect(isSameLocalDay(evening, nextDay)).toBe(false)
+  })
+
+  /**
+   * The reason this compares local components instead of dividing by a day's
+   * worth of milliseconds: across a DST boundary a local day is not 24 hours,
+   * so the arithmetic version reports two instants on the same calendar day as
+   * different days (or the reverse) depending on which side of the shift they
+   * fall.
+   */
+  it('holds across a day whose length is not 24 hours', () => {
+    const before = new Date(2026, 2, 8, 1, 0).getTime()
+    const after = new Date(2026, 2, 8, 23, 0).getTime()
+    expect(isSameLocalDay(before, after)).toBe(true)
+  })
+
+  it('separates the same clock time one year apart', () => {
+    const now = new Date(2026, 7, 24, 12, 0).getTime()
+    const lastYear = new Date(2025, 7, 24, 12, 0).getTime()
+    expect(isSameLocalDay(now, lastYear)).toBe(false)
   })
 })

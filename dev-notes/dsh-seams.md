@@ -266,3 +266,54 @@ a registration surface for them is deferred until such a consumer exists」。
 | RPC 两侧的类型 | `packages/client/connection/src/rpc.ts` |
 | 可用的 UI 组件与图标 | `packages/client/ui-primitives/src/index.ts` |
 | 全部 slot 的生成目录 | `packages/extensions/cordis-client-runner/src/client/slot-catalog.ts` |
+
+## 设计令牌：三类坑，只有一类编不过（2026-08-24 对着 `0.1.1-rc.2` 核实）
+
+浏览器半边用 inline `style` 写样式（理由见 `panel.tsx`），于是每个令牌都是 `var()` 里的一个
+**字符串**。TypeScript 没有东西可以拿它去比对，CSS 也不为「名字不存在」报错——解析不到就退回
+继承值或者什么都不画。两种结果都长得像「设计就是这样」。
+
+一次核对下来，本仓当时有 **6 个**这类问题，没有一个报过错：
+
+| 写的 | 实际 | 后果 |
+|---|---|---|
+| `state-warning-primary` | 令牌叫 `state-warn-*` | 两处警告用正文色渲染 |
+| `fill-tertiary` / `fill-brand` | dsh **没有任何** `fill-*` | 传输进度条槽与填充全透明——一条永远看不见的进度条，和「传输没在动」长得一模一样 |
+| `bg-primary` | 不存在 | 输入框没有自己的底色 |
+| `border-secondary` | 不存在 | 按钮没有描边 |
+| `brand-primary` | **存在，但解析成中性墨色** | 拿它画的「品牌」下划线与正文同色 |
+
+最后一行是**门禁抓不到的那类**：名字是合法的，值不是你以为的东西。dsh 自己两处栽过并留了
+注释——`ConversationRoot.module.css` 的选中 tab、`InputBar.module.css` 的光标，都改用了
+`state-business-primary`（「在明暗两种主题下都保持为蓝的最近语义令牌」）。本仓同此。
+
+前四行由 `scripts/check-tokens.mjs` 看守（串在 `typecheck` 里，CI 一并覆盖）。它的权威来源是
+**已安装的 `@deepseek-ai/dsh-client-ui-theme`**，不是抄进本仓的清单——手抄的清单会在 dsh 改名
+令牌时静默过期，那正是它要防的那类问题。
+
+## 设置页导航：图标与跳转都不归插件（同日核实）
+
+两件看起来该能做、实际不能的事：
+
+**① 设置导航行的图标无法自定义。** `settings.section` 的注册项只有 `id` / `order` / `label`，
+而 `SlotLabel` 的类型是「字符串或返回字符串的 thunk」，塞不进节点。图标由 shell 按 id 硬编码：
+
+```tsx
+// ui-settings-general/src/client/SettingsRoot.tsx
+function navIcon(id: string) {
+  if (id === 'models') return <IconDataOutline16 />
+  if (id === 'agent-presets') return <IconAgentPresetOutline16 />
+  if (id === 'plugins') return <IconPersonalizationOutline16 />
+  return <IconSettingsOutline16 />        // ← 所有第三方插件
+}
+```
+
+所以每个第三方插件在设置导航里都是同一个齿轮，插件市场也不例外。要改得给 dsh 提。
+
+**② 插件打不开设置面板。** `openSection` 全仓只有一个提供点（`SettingsRoot.tsx:113`），且只传给
+`settings.onboarding`。`SettingsSectionOwnerProps` 只有 `close`，`sidebar.footer.action` 连
+`close` 都没有。`ctx.settingsScope` 是**设置值的读写**，`settings.openDocument` 是打开配置文件
+——两者都不是「打开设置面板的某一页」。
+
+推论：侧边栏面板里任何「点这里去设置页看详情」的行都**没有东西可调**。面板只能就地展开自己
+已有的数据。改这块之前先回去看一眼 `SettingsRoot.tsx`——真开了口子，收件箱那行是第一个该用的。
