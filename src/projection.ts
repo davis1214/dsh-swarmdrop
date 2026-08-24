@@ -74,7 +74,13 @@ function referenceOf(entry: InboxEntryData): InboxReference {
   }
 }
 
-export const inboxProjectionDefinition: ProjectionDefinition<'swarmdropInbox', InboxRollState> = {
+/**
+ * The unit, typed against the contract this package compiles against.
+ *
+ * Exported below with **both spellings of the two renamed fields** — see the
+ * note there for why.
+ */
+const base: ProjectionDefinition<'swarmdropInbox', InboxRollState> = {
   key: 'swarmdropInbox',
   schema: projectionSchema,
   init: () => EMPTY,
@@ -98,3 +104,37 @@ export const inboxProjectionDefinition: ProjectionDefinition<'swarmdropInbox', I
   view: state => state,
   stateVersion: 1,
 }
+
+/**
+ * The registered unit, carrying **two spellings of the same two fields**.
+ *
+ * ## Why
+ *
+ * `ProjectionDefinition` was renamed between the version this package compiles
+ * against (`0.1.0-rc.8`) and the one a current `dsh` actually runs
+ * (`0.1.1-rc.2`):
+ *
+ * | compiled against | runtime expects |
+ * |---|---|
+ * | `schema` | `stateSchema` |
+ * | `view` | `wire.view` (+ `wire.viewSchema`) |
+ *
+ * **And `wire` is optional at runtime.** A unit without one is a server-only
+ * unit — perfectly legal, never pushed to a client. So an old-spelling
+ * definition registers cleanly, folds correctly, appears in `checkpoint()`,
+ * and is skipped by `snapshot()`: the `@` menu simply had no candidates, with
+ * nothing logged anywhere. That is the whole of the bug this shape fixes.
+ *
+ * Sending both spellings rather than picking one keeps the plugin working
+ * across both harness lines: each runtime reads the pair it knows and ignores
+ * the other. The cast is what lets the extra keys through — the compiled-against
+ * type has no room for them, which is precisely the problem being worked around.
+ *
+ * Remove the old pair once the peer range no longer admits a harness that reads
+ * it (`@deepseek-ai/dsh-session-projection` < 0.1.1).
+ */
+export const inboxProjectionDefinition = {
+  ...base,
+  stateSchema: base.schema,
+  wire: { viewSchema: base.schema, view: base.view },
+} as unknown as ProjectionDefinition<'swarmdropInbox', InboxRollState>

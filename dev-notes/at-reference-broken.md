@@ -1,6 +1,7 @@
-# `@` 引用为什么是空的：一次排查的中间结论
+# `@` 引用为什么是空的
 
-写于 2026-08-24。**未修复**，记下来是为了下次不必从头查一遍。
+写于 2026-08-24，**已在 0.7.1 修复**。保留全过程，因为真凶在八个合理怀疑全部排除之后才出现，
+而且它属于「静默失效」那一类——没有任何一处报错。
 
 ## 症状
 
@@ -59,3 +60,67 @@ key 集合。
 
 若查实是「第三方 bundle 注册得太晚，赶不上初始 window」，那是 dsh 侧的时序问题，应当给上游
 提 issue——第三方插件没有办法把自己的注册提到 base bundle 之前。
+
+
+## 真凶：`ProjectionDefinition` 改过名，而 `wire` 是可选的
+
+运行时的 `@deepseek-ai/dsh-session-projection@0.1.1-rc.2` 与本包编译所对的
+`0.1.0-rc.8` 之间，这个接口改了两个字段：
+
+| 编译时（rc.8） | 运行时（rc.2） |
+|---|---|
+| `schema` | `stateSchema` |
+| `view` | `wire.view`（旁边还多了 `wire.viewSchema`） |
+
+**关键在于 `wire` 是可选的。** 没有 `wire` 的 unit 是合法的**服务端专用单元**——注册成功、
+折叠正确、`checkpoint()` 里看得见，只是**永远不推给客户端**。于是：
+
+- 注册成功（key 在表里）✅
+- `apply` 正常跑，state 正确 ✅
+- `checkpoint()` 能看到它 ✅
+- **`snapshot()`（构造发给客户端那份值的调用）跳过它** ❌
+- 客户端读到 `undefined`，`@` 菜单没有 SwarmDrop 组，**没有任何一行日志说明原因**
+
+这正是 dsh 自己在 `api-catalog.ts` 里写的那句话的含义——「a changed state reference
+**in a client-visible unit** notifies the change feed」。「client-visible」不是形容词，
+是一个由 `wire` 在不在决定的**开关**。
+
+### 定位它的那一步
+
+前面所有探针都在问「注册成功了吗」，答案一直是「成功了」。转折点是改问**表里存的到底长什么样**：
+
+```
+[probe] definition BEFORE register {"keys":["key","schema","init","apply","view","stateVersion"],
+                                    "view":"function","schema":"object"}
+[probe] read back IMMEDIATELY     {"defKeys":["key","stateSchema","init","apply","wire","stateVersion"],
+                                    "view":"undefined"}
+```
+
+传进去六个字段俱全，读回来字段名换了一套、且函数没了。字段名对不上，是唯一能解释这个的原因。
+
+### 为什么版本会错配
+
+`peerDependencies` 写的是 `^0.1.0-rc.8`。按 node-semver，**一个 caret 范围不会匹配到
+`major.minor.patch` 元组不同的预发布版本**：`^0.1.0-rc.8` 展开成
+`>=0.1.0-rc.8 <0.2.0`，其中没有任何比较符落在 `0.1.1` 这个元组上并带预发布标签，
+所以 `0.1.1-rc.2` 被静默排除。
+
+结果就是：编译时对着一套契约，运行时跑在另一套上，而 peer 检查只出一句 warning。
+awesome-dsh-plugin 的 contributing 里专门警告过这条，方向正好相反（那边讲的是漏掉更旧的线）。
+
+### 修法
+
+1. definition **双写两套字段名**（`schema` + `stateSchema`，`view` + `wire`），各版本读各自认识的那对。
+2. peer 范围补上 0.1.1 分支：`^0.1.0-rc.8 || ^0.1.1-rc.1`。
+
+第 1 条可以在 peer 范围不再接纳 rc.8 那条线之后删掉。
+
+### 留给下次的判据
+
+**dsh 的扩展点里，可选字段是静默失效的温床。** 一个必填字段拼错会当场报错；一个可选字段
+拼错，等于主动声明「我不要这个能力」。碰到「注册成功了但功能没出现」，先去比对
+**运行时**（不是 node_modules 里那份）的接口定义有没有多出可选字段。
+
+同日抽查过另外两个扩展点，字段与本包用法一致，没有同类问题：`InputTriggerSource`
+（`packages/client/ui-input-trigger/src/types.ts`）与 `ConversationNodeDefinition`
+（`packages/client/runtime/src/client/contract/conversation.ts`）。

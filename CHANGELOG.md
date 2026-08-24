@@ -8,6 +8,35 @@ nothing written down does not get published.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-08-24
+
+### Fixed
+
+- **`@` references produced no candidates at all, on any harness from the
+  0.1.1 line.** `ProjectionDefinition` was renamed between the version this
+  package compiles against and the one a current `dsh` runs: `schema` became
+  `stateSchema`, and `view` moved into `wire.view` beside a `wire.viewSchema`.
+
+  Nothing failed loudly, because **`wire` is optional** — a unit without one is
+  a legal server-only unit that is simply never pushed to a client. So the
+  inbox unit registered cleanly, folded correctly and appeared in
+  `checkpoint()`, while `snapshot()` — the call that builds what a client
+  receives — skipped it. The `@` menu had no SwarmDrop group, and no log line
+  anywhere said why.
+
+  The definition now carries **both spellings**, so it works on either line.
+  `dev-notes/at-reference-broken.md` records what was ruled out on the way in,
+  because eight plausible causes were eliminated before this one.
+- Peer ranges admit the 0.1.1 harness line (`^0.1.0-rc.8 || ^0.1.1-rc.1`).
+  A caret range over one prerelease does not match a prerelease on a different
+  `major.minor.patch` tuple, so `^0.1.0-rc.8` silently excluded `0.1.1-rc.2` —
+  which is what let the plugin be compiled against one contract and run against
+  another in the first place.
+- `scripts/check-tokens.mjs` reads `@deepseek-ai/dsh-client-ui-theme`, which was
+  reaching it only as a hoisted third-level transitive dependency. It is now a
+  declared devDependency, so a change in dsh's own dependency tree cannot turn
+  `typecheck` red.
+
 ## [0.7.0] - 2026-08-24
 
 ### Changed
@@ -409,7 +438,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 First release: tools, the `/swarmdrop` command, conversation rows for transfers
 and received items, and the `@` inbox source.
 
-[Unreleased]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/swarm-apps/dsh-swarmdrop/compare/v0.4.1...v0.5.0
